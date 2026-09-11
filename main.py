@@ -86,6 +86,18 @@ async def on_member_join(member):
 
 @bot.event
 async def on_voice_state_update(member, before, after):
+    if after.channel is not None:
+        if after.channel.name.lower() == "➕ create vc":
+            try:
+                category = after.channel.category
+                vc_name = f"{member.name}'s VC"
+                new_vc = await category.create_voice_channel(vc_name)
+                await add_voice_channel(new_vc.id, member.id)
+                await member.move_to(new_vc)
+                print(f"✅ Created VC for {member}")
+            except Exception as e:
+                print(f"❌ Failed to create VC: {e}")
+
     if after.channel is None and before.channel is not None:
         owner = await get_voice_owner(before.channel.id)
         if owner and member.id == owner and len(before.channel.members) == 0:
