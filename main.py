@@ -35,6 +35,13 @@ async def init_db():
                 owner_id INTEGER
             )
         """)
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS mod_roles (
+                guild_id INTEGER,
+                role_id INTEGER,
+                PRIMARY KEY (guild_id, role_id)
+            )
+        """)
         await db.commit()
 
 async def get_autorole(guild_id):
@@ -64,8 +71,30 @@ async def remove_voice_channel(channel_id):
         await db.execute("DELETE FROM voice_channels WHERE channel_id = ?", (channel_id,))
         await db.commit()
 
-def is_admin(ctx):
-    return ctx.author.id == OWNER_ID or ctx.author.guild_permissions.administrator
+async def add_mod_role(guild_id, role_id):
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("INSERT OR IGNORE INTO mod_roles (guild_id, role_id) VALUES (?, ?)", (guild_id, role_id))
+        await db.commit()
+
+async def remove_mod_role(guild_id, role_id):
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("DELETE FROM mod_roles WHERE guild_id = ? AND role_id = ?", (guild_id, role_id))
+        await db.commit()
+
+async def get_mod_roles(guild_id):
+    async with aiosqlite.connect(DB_PATH) as db:
+        cursor = await db.execute("SELECT role_id FROM mod_roles WHERE guild_id = ?", (guild_id,))
+        rows = await cursor.fetchall()
+        return [row[0] for row in rows]
+
+async def is_admin(ctx):
+    if ctx.author.id == OWNER_ID or ctx.author.guild_permissions.administrator:
+        return True
+    mod_roles = await get_mod_roles(ctx.guild.id)
+    for role in ctx.author.roles:
+        if role.id in mod_roles:
+            return True
+    return False
 
 @bot.event
 async def on_ready():
@@ -166,7 +195,7 @@ class RenameModal(ui.Modal, title="Rename Channel"):
 @bot.command(name="autorole")
 @commands.guild_only()
 async def autorole(ctx, role: discord.Role):
-    if not is_admin(ctx):
+    if not await is_admin(ctx):
         await ctx.send("❌ Admin only")
         return
     await set_autorole(ctx.guild.id, role.id)
@@ -175,7 +204,7 @@ async def autorole(ctx, role: discord.Role):
 @bot.command(name="ban")
 @commands.guild_only()
 async def ban(ctx, member: discord.Member, *, reason="No reason"):
-    if not is_admin(ctx):
+    if not await is_admin(ctx):
         await ctx.send("❌ Admin only")
         return
     try:
@@ -187,7 +216,7 @@ async def ban(ctx, member: discord.Member, *, reason="No reason"):
 @bot.command(name="kick")
 @commands.guild_only()
 async def kick(ctx, member: discord.Member, *, reason="No reason"):
-    if not is_admin(ctx):
+    if not await is_admin(ctx):
         await ctx.send("❌ Admin only")
         return
     try:
@@ -199,7 +228,7 @@ async def kick(ctx, member: discord.Member, *, reason="No reason"):
 @bot.command(name="timeout")
 @commands.guild_only()
 async def timeout(ctx, member: discord.Member, minutes: int, *, reason="No reason"):
-    if not is_admin(ctx):
+    if not await is_admin(ctx):
         await ctx.send("❌ Admin only")
         return
     try:
@@ -212,7 +241,7 @@ async def timeout(ctx, member: discord.Member, minutes: int, *, reason="No reaso
 @bot.command(name="purge")
 @commands.guild_only()
 async def purge(ctx, amount: int):
-    if not is_admin(ctx):
+    if not await is_admin(ctx):
         await ctx.send("❌ Admin only")
         return
     if amount > 100:
@@ -270,6 +299,45 @@ async def vcinfo(ctx):
         await ctx.send(embed=embed, view=view)
     else:
         await ctx.send(embed=embed)
+
+@bot.command(name="setrole")
+@commands.guild_only()
+async def setrole(ctx, role: discord.Role):
+    if ctx.author.id != OWNER_ID and not ctx.author.guild_permissions.administrator:
+        await ctx.send("❌ Only server admins can use this")
+        return
+    await add_mod_role(ctx.guild.id, role.id)
+    await ctx.send(f"✅ {role.mention} can now use mod commands")
+
+@bot.command(name="removerole")
+@commands.guild_only()
+async def removerole(ctx, role: discord.Role):
+    if ctx.author.id != OWNER_ID and not ctx.author.guild_permissions.administrator:
+        await ctx.send("❌ Only server admins can use this")
+        return
+    await remove_mod_role(ctx.guild.id, role.id)
+    await ctx.send(f"✅ {role.mention} can no longer use mod commands")
+
+@bot.command(name="listroles")
+@commands.guild_only()
+async def listroles(ctx):
+    if ctx.author.id != OWNER_ID and not ctx.author.guild_permissions.administrator:
+        await ctx.send("❌ Only server admins can use this")
+        return
+
+    mod_roles = await get_mod_roles(ctx.guild.id)
+    if not mod_roles:
+        await ctx.send("❌ No mod roles set")
+        return
+
+    roles_mention = []
+    for role_id in mod_roles:
+        role = ctx.guild.get_role(role_id)
+        if role:
+            roles_mention.append(role.mention)
+
+    embed = discord.Embed(title="Mod Roles", description="\n".join(roles_mention) or "None", color=discord.Color.blue())
+    await ctx.send(embed=embed)
 
 async def main():
     await init_db()
